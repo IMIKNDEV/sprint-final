@@ -1,198 +1,145 @@
 # Simplon Maghreb — Sprint Final
-# Semaine 1 — Séance 2 : Remise à niveau Jobs & Queues (ne plus figer l'API)
+# Semaine 1 — Séance 2 : De l'appel IA synchrone à la génération asynchrone
 
 ## Objectifs pédagogiques
-- Comprendre pourquoi un traitement lent ne doit jamais rester dans le cycle de la requête
-- Maîtriser le cycle complet d'un Job : créer → dispatch → worker
-- Rendre la génération de ThreadForge asynchrone (réponse immédiate `202 Accepted`)
-- Gérer le statut d'un traitement du début à la fin
+- Faire un appel IA fiable grâce au structured output (un contrat JSON garanti)
+- Stocker proprement le résultat de l'IA grâce aux Casts
+- Comprendre pourquoi un appel lent ne doit pas rester dans le cycle de la requête
+- Déplacer la génération dans un Job pour rendre l'API rapide (réponse 202)
 
 ## Objectifs techniques
-Queue, Job, `ShouldQueue`, `dispatch()`, `queue:work` vs `queue:listen`, `QUEUE_CONNECTION=database`, table `jobs`, status code `202`, gestion de statut
+SDK `laravel/ai`, agent, structured output, `schema()`, Eloquent Casts (`array`, enum), queue, Job, `ShouldQueue`, `dispatch()`, `queue:work`, `QUEUE_CONNECTION=database`, status code 202
 
 ## Table des matières
-1. Le problème : l'API qui fige 8 secondes
-2. La solution : la queue (file d'attente)
-3. Le cycle d'un Job
-4. Rendre ThreadForge asynchrone
+1. Le fil de la séance : ça marche, mais c'est lent
+2. Partie 1 — Un appel IA fiable (structured output)
+3. Partie 2 — Le problème de la lenteur
+4. Partie 3 — La solution : la queue
 5. Récapitulatif et prochaines étapes
 
-## Déroulé de la séance (Type Remise à niveau, 2h)
-- **0–20 min** : Théorie. Le problème de la requête bloquée, la queue (file d'attente), le cycle d'un Job (sections 1 à 3)
-- **20–70 min** : LAB 3. Le cycle d'un Job, version simple
-- **70–115 min** : LAB 4. Rendre la génération asynchrone
-- **115–120 min** : Récapitulatif et 3 points clés
+## Déroulé de la séance (Type Consolidation, 2h30)
+- **0–15 min** : Théorie. Le fil de la séance, rappel du structured output (sections 1 à 2)
+- **15–75 min** : LAB 3. L'appel IA en synchrone (structured output + Casts)
+- **75–80 min** : On observe ensemble : l'API est lente. Pourquoi ? (section 3)
+- **80–125 min** : LAB 4. Déplacer la génération dans un Job (le mécanisme de la queue)
+- **125–150 min** : LAB 5. Brancher le Job sur l'endpoint réel (réponse 202)
+- **150 min** : Récapitulatif et 3 points clés
 
 ---
 
-## 1. Le problème : l'API qui fige 8 secondes
+## 1. Le fil de la séance : ça marche, mais c'est lent
 
-Imagine un créateur qui soumet un contenu à ThreadForge. Le serveur appelle l'IA pour générer le post. L'IA met 6 à 8 secondes à répondre. Pendant tout ce temps, la requête HTTP **reste suspendue** : la barre de chargement tourne, le navigateur attend, et si l'IA est lente, la requête finit en timeout.
+Cette séance raconte **une seule histoire**, en trois temps. On ne sépare pas l'IA et la queue dans deux mondes différents — parce que dans ThreadForge, le travail lent qu'on veut mettre dans la queue, **c'est justement l'appel à l'IA**. Les deux ne font qu'un.
 
-C'est inacceptable pour une API. Une API doit répondre **vite** — en quelques dizaines de millisecondes — même si le vrai travail prend plus de temps. La solution : on ne fait pas le travail lent pendant la requête. On le **met de côté** pour le traiter en arrière-plan.
+Le déroulé logique :
+1. On fait d'abord l'appel IA **en synchrone** : l'utilisateur soumet un contenu, l'IA génère un post, on le stocke. Ça marche.
+2. On constate un **problème** : la requête a mis 6 à 8 secondes à répondre, parce qu'on a attendu l'IA. Inacceptable pour une API.
+3. On applique la **solution** : on déplace ce même appel IA dans un Job. L'API répond tout de suite (`202`), et la génération se fait en arrière-plan.
 
-## 2. La solution : la queue (file d'attente)
+L'asynchrone n'est donc pas un concept abstrait : c'est la réponse directe à une lenteur que tu auras toi-même ressentie au LAB 3.
 
-Une **queue** (file d'attente) est une liste de tâches à faire plus tard. Un **Job** est une de ces tâches. Au lieu d'appeler l'IA pendant la requête, on crée un Job « générer le post » qu'on **dépose dans la queue**, et on répond immédiatement au client : *« reçu, c'est en cours de traitement »* (code `202 Accepted`).
+## 2. Partie 1 — Un appel IA fiable (structured output)
 
-Un processus séparé, le **worker**, prend les Jobs de la queue un par un et les exécute en arrière-plan. Le client n'attend plus.
+Vous avez déjà vu l'AI SDK la semaine dernière, donc ici c'est un **rappel consolidé**.
+
+Si tu demandes du JSON à l'IA dans le prompt (« renvoie-moi un hook, des points, un score »), tu joues à la loterie : parfois elle ajoute une phrase avant, oublie un champ, ou met le score en texte. Ton `json_decode` casse.
+
+Le **structured output** impose un **schema** au SDK : la réponse revient garantie, toujours la même forme, les bons types. C'est la différence entre « s'il te plaît, renvoie ça » et « c'est ce format ou rien ».
+
+Les champs en tableau (comme `body_points`) sont stockés en colonnes JSON, et on les manipule comme des tableaux PHP grâce à un **Cast** `array` — sans `json_encode`/`json_decode` manuel.
+
+C'est le LAB 3.
+
+## 3. Partie 2 — Le problème de la lenteur
+
+Après le LAB 3, on observe ensemble dans Postman : la requête de génération a mis plusieurs secondes. Pendant tout ce temps, la requête HTTP est restée **suspendue**, le client a attendu, et si l'IA est lente, ça finit en timeout.
+
+Une API doit répondre **vite** — quelques dizaines de millisecondes — même si le vrai travail prend du temps. Donc on ne fait pas le travail lent pendant la requête. On le met de côté.
+
+## 4. Partie 3 — La solution : la queue
+
+Une **queue** (file d'attente) est une liste de tâches à faire plus tard. Un **Job** est une de ces tâches. Au lieu d'appeler l'IA pendant la requête, on crée un Job « générer le post » qu'on **dépose dans la queue**, et on répond tout de suite au client : *« reçu, c'est en cours »* (code `202 Accepted`). Un processus séparé, le **worker**, prend les Jobs un par un et les exécute en arrière-plan.
 
 *L'image : tu déposes ta pâte au ferran (le four du quartier), tu repars vaquer à tes occupations, et tu reviens chercher ton pain une fois cuit. Tu ne restes pas planté devant le four à attendre.*
 
-## 3. Le cycle d'un Job
-
-Quatre étapes, qu'on va pratiquer au LAB 3 :
-1. **Configurer la queue** : `QUEUE_CONNECTION=database` + une table `jobs`.
-2. **Créer le Job** : une classe dans `app/Jobs/` avec la logique dans `handle()`.
-3. **Dispatcher** : `MonJob::dispatch($data)` dépose le Job dans la queue et rend la main aussitôt.
-4. **Lancer le worker** : `php artisan queue:work` exécute les Jobs en attente.
-
-## 4. Rendre ThreadForge asynchrone
-
-Au LAB 4, on applique ça au vrai cas : la génération d'un post. Le créateur soumet son contenu → on crée le `raw_content` en statut `en_attente`, on dispatch le Job, et on répond `202` immédiatement. Le worker fait la génération en arrière-plan et passe le statut à `traite`.
+C'est les LAB 4 et LAB 5 : d'abord on comprend le mécanisme du Job, puis on le branche sur l'endpoint réel.
 
 ## 5. Récapitulatif et prochaines étapes
 
 ### 5.1 Les 3 points clés à retenir
-1. Un traitement lent **ne reste jamais** dans la requête : il part dans un Job.
-2. L'API répond tout de suite (`202 Accepted`), le worker travaille en arrière-plan.
-3. Sans worker lancé (`queue:work`), **rien ne se passe** : les Jobs restent en attente. C'est le piège n°1.
+1. Le **structured output** garantit la forme de la réponse de l'IA ; les **Casts** la stockent typée.
+2. Un appel lent (l'IA) **ne reste jamais** dans la requête : il part dans un **Job**, l'API répond `202`.
+3. Sans **worker** lancé (`queue:work`), rien ne se passe : les Jobs restent en attente. C'est le piège n°1.
 
 ### 5.2 Prochaine séance
-Séance 3 : Consolidation de l'AI SDK — le contrat JSON (structured output) que le Job utilise pour générer un post fiable.
+Séance Tests (Pest) — vérifier automatiquement que cette génération marche, sans tout re-cliquer à la main. On testera notamment que le Job est bien dispatché, sans appeler la vraie IA.
 
 ---
 
-## 📝 LAB 3 — Le cycle d'un Job (version simple)
-**Durée estimée : 45 min**
+## 📝 LAB 3 — L'appel IA en synchrone (structured output + Casts)
+**Durée estimée : 60 min**
 
 ### Objectif
-Comprendre et pratiquer le cycle complet d'un Job sur un cas minimal : configurer la queue, créer un Job qui simule un travail lent, le dispatcher, et lancer le worker.
+Faire générer un post par l'IA avec un contrat JSON garanti, et stocker le résultat de façon typée. Pour l'instant, **tout se passe dans la requête** (synchrone) — on verra le problème juste après.
 
 ### Contexte
-Avant de brancher l'IA, on isole le mécanisme de la queue sur un Job tout simple, pour bien voir le « avant / après » du traitement asynchrone.
+C'est le cœur de ThreadForge. On consolide la partie IA d'abord, avant de s'occuper de la vitesse.
 
 ### Prérequis
-- Projet ThreadForge avec la table `raw_contents`
+- SDK `laravel/ai` installé et provider `groq` configuré (`config/ai.php`), `GROQ_API_KEY` dans `.env`
+- Les models `RawContent` et `GeneratedPost` en place
 
 ### Instructions
 
-**Étape 1 : Configurer la queue**
-Dans `.env` :
-```
-QUEUE_CONNECTION=database
-```
-Dans Laravel 13, la table `jobs` est déjà fournie par défaut (sa migration est livrée à l'installation). Il suffit donc de lancer les migrations si ce n'est pas déjà fait :
+**Étape 1 : Créer l'agent**
 ```bash
-php artisan migrate
+php artisan make:agent PostGenerator --structured
 ```
 
-**Étape 2 : Créer un Job simple**
-```bash
-php artisan make:job TraiterRawContentJob
-```
-Dans `handle()`, simule un travail lent puis change le statut :
+**Étape 2 : Définir les instructions (system prompt)**
+Dans `instructions()`, décris le rôle :
+> « Tu es un ghostwriter pour la tech community sur X. À partir d'un contenu technique brut, tu produis un post optimisé : un hook accrocheur, des points clés courts, un score de lisibilité technique, des hashtags pertinents, et une justification du respect du ton. »
+
+**Étape 3 : Définir le schema (le contrat JSON)**
 ```php
-<?php
-namespace App\Jobs;
-
-use App\Models\RawContent;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Queue\Queueable;
-
-class TraiterRawContentJob implements ShouldQueue
+public function schema(JsonSchema $schema): array
 {
-    use Queueable;
-
-    public function __construct(public RawContent $rawContent) {}
-
-    public function handle(): void
-    {
-        sleep(5); // simule un traitement lent (l'IA viendra au LAB 4)
-        $this->rawContent->update(['statut' => 'traite']);
-    }
+    return [
+        'hook_propose'                  => $schema->string()->required(),
+        'body_points'                   => $schema->array()->items($schema->string())->required(),
+        'technical_readability_score'   => $schema->integer()->required(),
+        'suggested_hashtags'            => $schema->array()->items($schema->string())->required(),
+        'tone_compliance_justification' => $schema->string()->required(),
+    ];
 }
 ```
 
-**Étape 3 : Dispatcher le Job**
-Quelque part où tu crées un `raw_content` (un controller de test ou Tinker), crée-le en `en_attente` puis dispatch :
+**Étape 4 : Ajouter les Casts au model `GeneratedPost`**
 ```php
-$rawContent = auth()->user()->rawContents()->create([
-    'blueprint_id' => $blueprintId,
-    'contenu_brut' => $texte,
-    'statut'       => 'en_attente',
-]);
+use App\Enums\StatutPost;
 
-TraiterRawContentJob::dispatch($rawContent);
-```
-
-**Étape 4 : Observer SANS worker**
-Crée un `raw_content`. Regarde en base : son `statut` reste `en_attente`, et une ligne apparaît dans la table `jobs`. **Rien ne se passe** tant que le worker ne tourne pas.
-
-**Étape 5 : Lancer le worker**
-```bash
-php artisan queue:work
-```
-Le worker prend le Job, attend 5 secondes (le `sleep`), puis passe le statut à `traite`. Recharge la base : le statut a changé.
-
-*(En développement, `queue:listen` recharge ton code à chaque Job — pratique tant que tu modifies le Job. `queue:work` est plus rapide mais doit être redémarré après un changement de code.)*
-
-### Critères d'évaluation
-- `QUEUE_CONNECTION=database` et table `jobs` présente
-- `TraiterRawContentJob` créé et dispatché
-- Sans worker : le statut reste `en_attente`, un Job apparaît en table
-- Avec worker : le statut passe à `traite` après ~5 s
-
-### Livrable
-Dans `lab3-notes.md` :
-- Capture de la table `jobs` avec un Job en attente (avant worker)
-- Capture montrant le statut passé à `traite` (après worker)
-
-### En cas de blocage
-- **Rien ne se passe même avec le worker** : `QUEUE_CONNECTION` n'est pas sur `database`, ou la table `jobs` n'existe pas, ou tu n'as pas relancé le serveur après avoir changé le `.env` (`php artisan config:clear`).
-- **`Class TraiterRawContentJob not found`** : vérifie le namespace `App\Jobs`.
-- **Le Job s'exécute mais le statut ne change pas** : vérifie que `RawContent` a `statut` dans son `$fillable`.
-
----
-
-## 📝 LAB 4 — Rendre la génération asynchrone
-**Durée estimée : 45 min**
-
-### Objectif
-Remplacer le travail simulé du LAB 3 par la vraie génération de post (appel IA), déclenchée par l'endpoint de soumission, avec une réponse immédiate `202 Accepted`.
-
-### Contexte
-On branche le mécanisme de queue sur le vrai cas de ThreadForge : soumettre un contenu déclenche une génération en arrière-plan. L'API répond tout de suite.
-
-### Prérequis
-- LAB 3 terminé (queue et worker fonctionnels)
-- L'agent de génération de la semaine dernière *(repris en détail à la séance 3 — ici on se concentre sur la queue)*
-
-### Instructions
-
-**Étape 1 : Transformer le Job en générateur**
-Dans `TraiterRawContentJob` (ou un nouveau `GenererPostJob`), remplace le `sleep` par la génération réelle :
-```php
-public function handle(): void
+protected function casts(): array
 {
-    $response = (new PostGenerator)->prompt($this->rawContent->contenu_brut);
-
-    $this->rawContent->generatedPost()->create([
-        'hook_propose'                  => $response['hook_propose'],
-        'body_points'                   => $response['body_points'],
-        'technical_readability_score'   => $response['technical_readability_score'],
-        'suggested_hashtags'            => $response['suggested_hashtags'],
-        'tone_compliance_justification' => $response['tone_compliance_justification'],
-        'statut'                        => 'draft',
-    ]);
-
-    $this->rawContent->update(['statut' => 'traite']);
+    return [
+        'statut'             => StatutPost::class,
+        'body_points'        => 'array',
+        'suggested_hashtags' => 'array',
+        'payload_brut'       => 'array',
+    ];
 }
 ```
-*(`PostGenerator` est l'agent détaillé à la séance 3. Si le tien marchait la semaine dernière, réutilise-le.)*
+Crée le backed enum `app/Enums/StatutPost.php` :
+```php
+enum StatutPost: string
+{
+    case Draft    = 'draft';
+    case Archived = 'archived';
+    case Posted   = 'posted';
+}
+```
 
-**Étape 2 : Créer l'endpoint de soumission**
-Dans un `Api/ContentController`, la méthode `repurpose` crée le `raw_content`, dispatch le Job, et répond `202` :
+**Étape 5 : Générer dans le controller (synchrone, pour l'instant)**
+Dans un `Api/ContentController`, méthode `repurpose` — on appelle l'IA **directement** :
 ```php
 public function repurpose(StoreContentRequest $request)
 {
@@ -202,37 +149,192 @@ public function repurpose(StoreContentRequest $request)
         'statut'       => 'en_attente',
     ]);
 
-    TraiterRawContentJob::dispatch($rawContent);
+    $response = (new PostGenerator)->prompt($rawContent->contenu_brut);
+
+    $rawContent->generatedPost()->create([
+        'hook_propose'                  => $response['hook_propose'],
+        'body_points'                   => $response['body_points'],
+        'technical_readability_score'   => $response['technical_readability_score'],
+        'suggested_hashtags'            => $response['suggested_hashtags'],
+        'tone_compliance_justification' => $response['tone_compliance_justification'],
+        'statut'                        => 'draft',
+    ]);
+
+    $rawContent->update(['statut' => 'traite']);
+
+    return response()->json(['message' => 'Post généré.', 'raw_content_id' => $rawContent->id]);
+}
+```
+
+**Étape 6 : Tester dans Postman**
+- `POST /api/content/repurpose` avec un contenu → un `generated_post` est créé, avec `body_points` en tableau (grâce au Cast).
+- **Observe le temps de réponse** dans Postman : plusieurs secondes. Garde ce chiffre en tête, on en reparle.
+
+### Critères d'évaluation
+- Agent `PostGenerator` avec un `schema()` conforme au contrat
+- Casts `array` et enum en place sur `GeneratedPost`
+- Le `generated_post` est stocké typé (tableaux exploitables, pas de string JSON brute)
+- Tu as noté le temps de réponse (il est lent)
+
+### Livrable
+Dans `lab3-notes.md` :
+- Capture du `generated_post` en base avec `body_points` en tableau
+- Le temps de réponse observé dans Postman
+
+### En cas de blocage
+- **Erreur d'authentification IA** : le provider par défaut n'est pas `groq` dans `config/ai.php`, ou `GROQ_API_KEY` manque.
+- **`body_points` est une string JSON** : le Cast `array` n'est pas déclaré, ou tu fais un `json_encode` manuel.
+- **La réponse n'a pas la bonne forme** : revois ton system prompt et le `schema()`.
+
+### Ressources
+- SDK `laravel/ai` : https://laravel.com/docs/13.x/ai-sdk
+- Eloquent Casting : https://laravel.com/docs/13.x/eloquent-mutators
+
+---
+
+## 📝 LAB 4 — Déplacer la génération dans un Job (le mécanisme de la queue)
+**Durée estimée : 45 min**
+
+### Objectif
+Comprendre le cycle d'un Job en sortant l'appel IA de la requête : configurer la queue, créer le Job, le dispatcher, lancer le worker.
+
+### Contexte
+Au LAB 3, tu as senti la lenteur. Ici on règle le problème : on déplace **exactement le même appel IA** dans un Job qui tourne en arrière-plan.
+
+### Prérequis
+- LAB 3 terminé (la génération synchrone marche)
+
+### Instructions
+
+**Étape 1 : Configurer la queue**
+Dans `.env` :
+```
+QUEUE_CONNECTION=database
+```
+Dans Laravel 13, la table `jobs` est déjà fournie par défaut. Lance simplement les migrations si ce n'est pas déjà fait :
+```bash
+php artisan migrate
+```
+
+**Étape 2 : Créer le Job**
+```bash
+php artisan make:job GenererPostJob
+```
+Déplace la logique de génération du LAB 3 **dans** le `handle()` :
+```php
+<?php
+namespace App\Jobs;
+
+use App\Models\RawContent;
+use App\Ai\Agents\PostGenerator;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
+
+class GenererPostJob implements ShouldQueue
+{
+    use Queueable;
+
+    public function __construct(public RawContent $rawContent) {}
+
+    public function handle(): void
+    {
+        $response = (new PostGenerator)->prompt($this->rawContent->contenu_brut);
+
+        $this->rawContent->generatedPost()->create([
+            'hook_propose'                  => $response['hook_propose'],
+            'body_points'                   => $response['body_points'],
+            'technical_readability_score'   => $response['technical_readability_score'],
+            'suggested_hashtags'            => $response['suggested_hashtags'],
+            'tone_compliance_justification' => $response['tone_compliance_justification'],
+            'statut'                        => 'draft',
+        ]);
+
+        $this->rawContent->update(['statut' => 'traite']);
+    }
+}
+```
+
+**Étape 3 : Observer le cycle**
+Avant de brancher l'endpoint, teste le dispatch en Tinker :
+```php
+$rc = \App\Models\RawContent::first();
+\App\Jobs\GenererPostJob::dispatch($rc);
+```
+Regarde la table `jobs` : une ligne est apparue, mais **rien ne se passe** — le statut reste `en_attente`. Le Job attend un worker.
+
+**Étape 4 : Lancer le worker**
+```bash
+php artisan queue:work
+```
+Le worker prend le Job, fait la génération, et le `generated_post` apparaît. Le statut passe à `traite`.
+
+### Critères d'évaluation
+- `QUEUE_CONNECTION=database` et table `jobs` présente
+- `GenererPostJob` contient la logique de génération dans `handle()`
+- Sans worker : le Job reste en attente ; avec worker : le post est créé
+
+### Livrable
+Dans `lab4-notes.md` :
+- Capture de la table `jobs` avec un Job en attente (avant worker)
+- Capture du `generated_post` créé après passage du worker
+
+### En cas de blocage
+- **Rien ne se passe avec le worker** : `QUEUE_CONNECTION` n'est pas sur `database`, ou tu n'as pas relancé après avoir changé le `.env` (`php artisan config:clear`).
+- **`Class GenererPostJob not found`** : vérifie le namespace `App\Jobs`.
+- **Une modif du Job n'est pas prise en compte** : `queue:work` garde le code en mémoire, redémarre-le (ou utilise `queue:listen` en développement).
+
+---
+
+## 📝 LAB 5 — Brancher le Job sur l'endpoint réel (réponse 202)
+**Durée estimée : 25 min**
+
+### Objectif
+Modifier l'endpoint pour qu'il dispatch le Job au lieu de générer en synchrone, et réponde immédiatement `202 Accepted`.
+
+### Contexte
+On boucle l'histoire : l'endpoint qui figeait 6 secondes au LAB 3 va maintenant répondre en quelques millisecondes.
+
+### Prérequis
+- LAB 4 terminé (le Job fonctionne avec le worker)
+
+### Instructions
+
+**Étape 1 : Alléger le controller**
+Remplace l'appel IA synchrone du LAB 3 par un simple `dispatch` :
+```php
+public function repurpose(StoreContentRequest $request)
+{
+    $rawContent = auth()->user()->rawContents()->create([
+        'blueprint_id' => $request->validated('blueprint_id'),
+        'contenu_brut' => $request->validated('contenu_brut'),
+        'statut'       => 'en_attente',
+    ]);
+
+    GenererPostJob::dispatch($rawContent);
 
     return response()->json([
-        'message' => 'Contenu reçu, génération en cours.',
+        'message'        => 'Contenu reçu, génération en cours.',
         'raw_content_id' => $rawContent->id,
     ], 202);
 }
 ```
 
-**Étape 3 : Déclarer la route**
-```php
-Route::middleware('auth:sanctum')->post('/content/repurpose', [ContentController::class, 'repurpose']);
-```
-
-**Étape 4 : Tester le flux complet**
-- `POST /api/content/repurpose` avec un contenu → réponse **immédiate** `202 Accepted` (la page ne fige pas)
+**Étape 2 : Tester le flux complet**
+- `POST /api/content/repurpose` → réponse **immédiate** `202` (compare le temps avec celui du LAB 3 !)
 - Le worker (`queue:work`) traite en arrière-plan
-- Après quelques secondes, le `raw_content` passe en `traite` et un `generated_post` apparaît
+- Après quelques secondes, le `raw_content` passe en `traite` et le `generated_post` apparaît
 
 ### Critères d'évaluation
-- L'endpoint répond `202` immédiatement (pas de page figée)
-- Le Job crée bien un `generated_post` lié au `raw_content`
-- Le statut passe de `en_attente` à `traite`
+- L'endpoint répond `202` **immédiatement** (plus de page figée)
+- Le contrôleur ne fait plus que dispatcher (plus d'appel IA direct)
+- La génération se fait bien en arrière-plan via le worker
 
 ### Livrable
-Dans `lab4-notes.md` :
-- Capture de la réponse `202` (avec le temps de réponse rapide visible dans Postman)
-- Capture du `generated_post` créé en base après passage du worker
+Dans `lab5-notes.md` :
+- Capture de la réponse `202` avec le temps de réponse rapide
+- Une phrase : compare le temps de réponse avant (LAB 3) et après (LAB 5)
 
 ### En cas de blocage
-- **La réponse n'est pas immédiate** : l'appel IA est resté dans le controller au lieu d'être dans le Job. Vérifie que `repurpose` ne fait que dispatcher.
-- **Le `generated_post` n'est pas créé** : vérifie la relation `generatedPost()` (hasOne) sur `RawContent` et les `$fillable` de `GeneratedPost`.
-- **Erreur sur `$response['...']`** : l'agent ne renvoie pas la bonne structure → c'est l'objet de la séance 3 (structured output).
-- **Une modif du Job n'est pas prise en compte** : `queue:work` garde le code en mémoire, redémarre-le (ou utilise `queue:listen`).
+- **La réponse n'est pas immédiate** : l'appel IA est resté dans le controller. Vérifie que `repurpose` ne fait plus que `dispatch`.
+- **Le post n'est jamais créé** : le worker n'est pas lancé (`queue:work`).
+- **Erreur sur `$response['...']` dans le Job** : le schema de l'agent ne renvoie pas la bonne structure (revois le LAB 3).

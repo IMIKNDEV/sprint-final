@@ -1,5 +1,5 @@
 # Simplon Maghreb — Sprint Final
-# Semaine 1 — Séance 4 : Introduction aux tests avec Pest (le pont vers le DevOps)
+# Semaine 1 — Séance 3 : Introduction aux tests avec Pest (le pont vers le DevOps)
 
 ## Objectifs pédagogiques
 - Comprendre pourquoi on automatise les tests plutôt que de tout re-cliquer à la main

@@ -66,28 +66,32 @@ Là, l'app tourne avec TON PHP, sur TA machine. La suite de l'atelier : la faire
 # 1. L'image de base : un Linux avec PHP 8.3 déjà installé
 FROM php:8.3-cli
 
-# 2. On récupère Composer depuis son image officielle
+# 2. L'image de base est minimaliste : on installe git et unzip,
+#    dont Composer a besoin pour télécharger les paquets
+RUN apt-get update && apt-get install -y git unzip && rm -rf /var/lib/apt/lists/*
+
+# 3. On récupère Composer depuis son image officielle
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# 3. Le dossier de travail À L'INTÉRIEUR du conteneur
+# 4. Le dossier de travail À L'INTÉRIEUR du conteneur
 WORKDIR /app
 
-# 4. On copie le code du projet dans le conteneur
+# 5. On copie le code du projet dans le conteneur
 COPY . .
 
-# 5. On installe les dépendances DANS le conteneur
+# 6. On installe les dépendances DANS le conteneur
 RUN composer install --no-interaction
 
-# 6. Préparer Laravel : le .env et la clé d'application
+# 7. Préparer Laravel : le .env et la clé d'application
 RUN cp .env.example .env && php artisan key:generate
 
-# 7. Sessions et cache en mode fichier (pas de base de données aujourd'hui)
+# 8. Sessions et cache en mode fichier (pas de base de données aujourd'hui)
 ENV SESSION_DRIVER=file CACHE_STORE=file
 
-# 8. Le port que le conteneur expose
+# 9. Le port que le conteneur expose
 EXPOSE 8000
 
-# 9. La commande lancée au démarrage du conteneur
+# 10. La commande lancée au démarrage du conteneur
 CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
 ```
 
